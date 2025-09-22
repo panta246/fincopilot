@@ -1,0 +1,67 @@
+version: "3.9" # Compose schema version.
+name: fincopilot-dev # Project name → also prefixes network & volumes.
+
+services:
+  postgres: # PostgreSQL 16 service.
+    image: postgres:16-alpine # Small, official image.
+    environment:
+      POSTGRES_USER: app # Creates role "app"...
+      POSTGRES_PASSWORD: app # ...with password "app".
+      POSTGRES_DB: fincopilot # Creates DB "fincopilot".
+    ports: ["5432:5432"] # Expose DB to host on 5432.
+    volumes:
+      - pgdata:/var/lib/postgresql/data # Named volume for durable data.
+    healthcheck: # Wait-until-ready signal for dependents.
+      test: ["CMD-SHELL", "pg_isready -U app -d fincopilot"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis: # Redis 7 service.
+    image: redis:7-alpine
+    ports: ["6379:6379"] # Expose Redis on 6379.
+    command: ["redis-server", "--appendonly", "yes"] # AOF persistence.
+    volumes: ["redis:/data"] # Persist Redis data.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"] # Replies "PONG" when ready.
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  clickhouse: # ClickHouse OLAP store.
+    image: clickhouse/clickhouse-server:24.8
+    ports: ["8123:8123", "9000:9000"] # 8123 HTTP, 9000 native.
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 } # Avoid FD limits.
+    volumes:
+      - chdata:/var/lib/clickhouse # Persist data.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping | grep -q Ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+
+  minio: # S3-compatible object storage.
+    image: minio/minio:latest
+    command: server /data --console-address ":9001" # Enable web console.
+    environment:
+      MINIO_ROOT_USER: minio # Dev-only root user.
+      MINIO_ROOT_PASSWORD: minio12345# Dev-only password.
+    ports: ["9000:9000", "9001:9001"] # 9000 S3 API, 9001 console UI.
+    volumes: ["minio:/data"] # Persist objects.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"] # Liveness.
+      interval: 5s
+      timeout: 3s
+      retries: 50
+
+  mailhog: # Dev SMTP sink + web UI.
+    image: mailhog/mailhog:latest
+    ports: ["1025:1025", "8025:8025"] # 1025 SMTP, 8025 web UI.
+    # MailHog image lacks nc/curl/wget → drop healthcheck to avoid false UNHEALTHY.
+
+volumes: # Declare named volumes.
+  pgdata: {}
+  redis: {}
+  chdata: {}
+  minio: {}
